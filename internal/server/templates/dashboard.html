@@ -3,119 +3,81 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta http-equiv="refresh" content="{{.UpdateFrequency}}">
     <title>Node Status Dashboard</title>
     <script src="https://cdn.tailwindcss.com"></script>
 </head>
-<body class="bg-gray-100" data-update-frequency="{{.UpdateFrequency}}">
+<body class="bg-gray-100">
     <div class="container mx-auto px-4 py-8">
         <h1 class="text-3xl font-bold text-gray-800 mb-8 text-center">Node Status Dashboard</h1>
         
-        <!-- Dynamic container for multi-node metrics -->
-        <div id="metrics-container">
-            <!-- Node sections will be dynamically generated here -->
-        </div>
-        
-        <div class="mt-8 text-center text-gray-500">
-            <p class="status-text">Metrics updated every 5 seconds</p>
-        </div>
-    </div>
-</body>
-<script>
-    async function fetchMetrics() {
-        try {
-            const response = await fetch('/api/metrics');
-            const data = await response.json();
-
-            // Clear existing content
-            const container = document.getElementById('metrics-container');
-            container.innerHTML = '';
-
-            // Create cards for each node
-            data.nodes.forEach(node => {
-                const nodeSection = createNodeSection(node);
-                container.appendChild(nodeSection);
-            });
-        } catch (error) {
-            console.error('Error fetching metrics:', error);
-        }
-    }
-
-    function createNodeSection(node) {
-        const section = document.createElement('div');
-        section.className = 'mb-8';
-
-        section.innerHTML = `
-                <h2 class="text-xl font-semibold text-gray-700 mb-4">${node.name}</h2>
-                <div class="grid grid-cols-1 md:grid-cols-3 gap-6 mb-6">
-                    <!-- CPU Usage Card -->
-                    <div class="bg-white rounded-lg shadow-md p-6">
-                        <div class="flex items-center justify-between">
-                            <div>
-                                <p class="text-sm font-medium text-gray-600">CPU Usage</p>
-                                <p class="text-2xl font-bold text-blue-600">${node.data.cpu}%</p>
-                                <p class="text-xs text-gray-500">${node.data.cpu_cores} cores</p>
-                            </div>
-                            <div class="p-3 bg-blue-100 rounded-full">
-                                <svg class="w-6 h-6 text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 3v2m6-2v2M9 19v2m6-2v2M5 9H3m2 6H3m18-6h-2m2 6h-2M7 19h10a2 2 0 002-2V7a2 2 0 00-2-2H7a2 2 0 00-2 2v10a2 2 0 002 2zM9 9h6v6H9V9z"></path>
-                                </svg>
+        <!-- Static container for multi-node metrics -->
+        <div class="metrics-container">
+            {{if .Metrics}}
+                {{range .Metrics.Nodes}}
+                <div class="mb-8">
+                    <h2 class="text-xl font-semibold text-gray-700 mb-4">{{.Name}}</h2>
+                    <div class="grid grid-cols-1 md:grid-cols-3 gap-6 mb-6">
+                        <!-- CPU Usage Card -->
+                        <div class="bg-white rounded-lg shadow-md p-6">
+                            <div class="flex items-center justify-between">
+                                <div>
+                                    <p class="text-sm font-medium text-gray-600">CPU Usage</p>
+                                    <p class="text-2xl font-bold text-blue-600">{{printf "%.1f" .Data.CPU}}%</p>
+                                    <p class="text-xs text-gray-500">{{.Data.CPUCores}} cores</p>
+                                </div>
+                                <div class="p-3 bg-blue-100 rounded-full">
+                                    <svg class="w-6 h-6 text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 3v2m6-2v2M9 19v2m6-2v2M5 9H3m2 6H3m18-6h-2m2 6h-2M7 19h10a2 2 0 002-2V7a2 2 0 00-2-2H7a2 2 0 00-2 2v10a2 2 0 002 2zM9 9h6v6H9V9z"></path>
+                                    </svg>
+                                </div>
                             </div>
                         </div>
-                    </div>
 
-                    <!-- Memory Usage Card -->
-                    <div class="bg-white rounded-lg shadow-md p-6">
-                        <div class="flex items-center justify-between">
-                            <div>
-                                <p class="text-sm font-medium text-gray-600">Memory Usage</p>
-                                <p class="text-2xl font-bold text-green-600">${node.data.memory}%</p>
-                                <p class="text-xs text-gray-500">${node.data.max_memory_mb} MB total</p>
-                            </div>
-                            <div class="p-3 bg-green-100 rounded-full">
-                                <svg class="w-6 h-6 text-green-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 7v10c0 2.21 3.582 4 8 4s8-1.79 8-4V7M4 7c0 2.21 3.582 4 8 4s8-1.79 8-4M4 7c0-2.21 3.582-4 8-4s8 1.79 8 4"></path>
-                                </svg>
+                        <!-- Memory Usage Card -->
+                        <div class="bg-white rounded-lg shadow-md p-6">
+                            <div class="flex items-center justify-between">
+                                <div>
+                                    <p class="text-sm font-medium text-gray-600">Memory Usage</p>
+                                    <p class="text-2xl font-bold text-green-600">{{printf "%.1f" .Data.Memory}}%</p>
+                                    <p class="text-xs text-gray-500">{{.Data.MaxMemoryMB}} MB total</p>
+                                </div>
+                                <div class="p-3 bg-green-100 rounded-full">
+                                    <svg class="w-6 h-6 text-green-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 7v10c0 2.21 3.582 4 8 4s8-1.79 8-4V7M4 7c0 2.21 3.582 4 8 4s8-1.79 8-4M4 7c0-2.21 3.582-4 8-4s8 1.79 8 4"></path>
+                                    </svg>
+                                </div>
                             </div>
                         </div>
-                    </div>
 
-                    <!-- Disk Usage Card -->
-                    <div class="bg-white rounded-lg shadow-md p-6">
-                        <div class="flex items-center justify-between">
-                            <div>
-                                <p class="text-sm font-medium text-gray-600">Disk Usage</p>
-                                <p class="text-2xl font-bold text-purple-600">${node.data.disk}%</p>
-                                <p class="text-xs text-gray-500">${node.data.disk_size_gb} GB total</p>
-                            </div>
-                            <div class="p-3 bg-purple-100 rounded-full">
-                                <svg class="w-6 h-6 text-purple-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z"></path>
-                                </svg>
+                        <!-- Disk Usage Card -->
+                        <div class="bg-white rounded-lg shadow-md p-6">
+                            <div class="flex items-center justify-between">
+                                <div>
+                                    <p class="text-sm font-medium text-gray-600">Disk Usage</p>
+                                    <p class="text-2xl font-bold text-purple-600">{{printf "%.1f" .Data.Disk}}%</p>
+                                    <p class="text-xs text-gray-500">{{.Data.DiskSizeGB}} GB total</p>
+                                </div>
+                                <div class="p-3 bg-purple-100 rounded-full">
+                                    <svg class="w-6 h-6 text-purple-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z"></path>
+                                    </svg>
+                                </div>
                             </div>
                         </div>
                     </div>
                 </div>
-            `;
-
-        return section;
-    }
-
-    // Get update frequency from data attribute
-    const frequency = document.body.getAttribute('data-update-frequency');
-    const updateFrequency = parseInt(frequency) || 5;
-
-    // Fetch metrics at configured interval
-    setInterval(fetchMetrics, updateFrequency * 1000);
-
-    // Update the display text
-    document.addEventListener('DOMContentLoaded', function() {
-        const statusText = document.querySelector('.status-text');
-        if (statusText) {
-            statusText.textContent = `Metrics updated every ${updateFrequency} seconds`;
-        }
-    });
-
-    // Fetch metrics on page load
-    window.onload = fetchMetrics;
-</script>
+                {{end}}
+            {{else}}
+                <div class="text-center text-gray-500">
+                    <p>Loading metrics data...</p>
+                </div>
+            {{end}}
+        </div>
+        
+        <div class="mt-8 text-center text-gray-500">
+            <p>Page refreshes every {{.UpdateFrequency}} seconds</p>
+        </div>
+    </div>
+</body>
 </html>

@@ -11,12 +11,13 @@ import (
 )
 
 var (
-	port              int
-	nodeExporterAddrs []string
-	updateFrequency   int
-	enableAuth        bool
-	authUser          string
-	authPassword      string
+	port               int
+	nodeExporterAddrs  []string
+	updateFrequency    int
+	dataFetchFrequency int
+	enableAuth         bool
+	authUser           string
+	authPassword       string
 )
 
 // rootCmd represents the base command when called without any subcommands
@@ -47,7 +48,7 @@ var rootCmd = &cobra.Command{
 		}
 
 		// Start the dashboard server
-		srv := server.New(port, nodeConfigs, updateFrequency, enableAuth, authUser, authPassword)
+		srv := server.New(port, nodeConfigs, updateFrequency, dataFetchFrequency, enableAuth, authUser, authPassword)
 		if err := srv.Start(); err != nil {
 			fmt.Printf("Error starting server: %v\n", err)
 			os.Exit(1)
@@ -67,7 +68,8 @@ func init() {
 	// Define flags for configuration
 	rootCmd.Flags().IntVarP(&port, "port", "p", 8080, "Port to listen on")
 	rootCmd.Flags().StringSliceVarP(&nodeExporterAddrs, "node-exporter", "n", []string{}, "Node exporter addresses (URLs only)")
-	rootCmd.Flags().IntVarP(&updateFrequency, "update-frequency", "u", 5, "Dashboard update frequency in seconds")
+	rootCmd.Flags().IntVarP(&updateFrequency, "update-frequency", "u", 30, "Dashboard update frequency in seconds")
+	rootCmd.Flags().IntVarP(&dataFetchFrequency, "data-fetch-frequency", "d", 30, "Node exporter data fetch frequency in seconds")
 	rootCmd.Flags().BoolVar(&enableAuth, "enable-auth", false, "Enable basic authentication")
 	rootCmd.Flags().StringVar(&authUser, "auth-user", "", "Username for basic authentication (required when auth is enabled)")
 	rootCmd.Flags().StringVar(&authPassword, "auth-password", "", "Password for basic authentication (required when auth is enabled)")

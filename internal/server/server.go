@@ -3,11 +3,12 @@ package server
 import (
 	"crypto/subtle"
 	_ "embed"
-	"encoding/json"
 	"fmt"
 	"html/template"
 	"net/http"
 	"strconv"
+	"sync"
+	"time"
 
 	"github.com/webishdev/node_dashboard/internal/metrics"
 )
@@ -23,34 +24,72 @@ type Server interface {
 
 // DashboardServer implements the Server interface
 type DashboardServer struct {
-	port             int
-	nodeConfigs      []metrics.NodeConfig
-	httpServer       *http.Server
-	metricsCollector metrics.MultiNodeCollector
-	template         *template.Template
-	updateFrequency  int
-	enableAuth       bool
-	authUser         string
-	authPassword     string
+	port               int
+	nodeConfigs        []metrics.NodeConfig
+	httpServer         *http.Server
+	metricsCollector   metrics.MultiNodeCollector
+	template           *template.Template
+	updateFrequency    int
+	dataFetchFrequency int
+	enableAuth         bool
+	authUser           string
+	authPassword       string
+	cachedMetrics      *metrics.MultiNodeMetrics
+	metricsMutex       sync.RWMutex
 }
 
 // New creates a new dashboard server instance
-func New(port int, nodeConfigs []metrics.NodeConfig, updateFrequency int, enableAuth bool, authUser, authPassword string) Server {
+func New(port int, nodeConfigs []metrics.NodeConfig, updateFrequency int, dataFetchFrequency int, enableAuth bool, authUser, authPassword string) Server {
 	tmpl, err := template.New("dashboard").Parse(templateContent)
 	if err != nil {
 		panic(fmt.Sprintf("Failed to parse template: %v", err))
 	}
 
 	return &DashboardServer{
-		port:             port,
-		nodeConfigs:      nodeConfigs,
-		metricsCollector: metrics.NewMultiNodeCollector(nodeConfigs),
-		template:         tmpl,
-		updateFrequency:  updateFrequency,
-		enableAuth:       enableAuth,
-		authUser:         authUser,
-		authPassword:     authPassword,
+		port:               port,
+		nodeConfigs:        nodeConfigs,
+		metricsCollector:   metrics.NewMultiNodeCollector(nodeConfigs),
+		template:           tmpl,
+		updateFrequency:    updateFrequency,
+		dataFetchFrequency: dataFetchFrequency,
+		enableAuth:         enableAuth,
+		authUser:           authUser,
+		authPassword:       authPassword,
 	}
+}
+
+// startBackgroundDataFetching starts a goroutine that periodically fetches metrics
+func (s *DashboardServer) startBackgroundDataFetching() {
+	// Fetch initial data
+	s.fetchAndCacheMetrics()
+
+	// Start background ticker
+	ticker := time.NewTicker(time.Duration(s.dataFetchFrequency) * time.Second)
+	go func() {
+		for range ticker.C {
+			s.fetchAndCacheMetrics()
+		}
+	}()
+}
+
+// fetchAndCacheMetrics fetches metrics and stores them in cache
+func (s *DashboardServer) fetchAndCacheMetrics() {
+	metrics, err := s.metricsCollector.GetMetrics()
+	if err != nil {
+		fmt.Printf("Error fetching metrics: %v\n", err)
+		return
+	}
+
+	s.metricsMutex.Lock()
+	s.cachedMetrics = metrics
+	s.metricsMutex.Unlock()
+}
+
+// getCachedMetrics returns the cached metrics in a thread-safe way
+func (s *DashboardServer) getCachedMetrics() *metrics.MultiNodeMetrics {
+	s.metricsMutex.RLock()
+	defer s.metricsMutex.RUnlock()
+	return s.cachedMetrics
 }
 
 // basicAuthMiddleware provides HTTP basic authentication
@@ -83,6 +122,9 @@ func (s *DashboardServer) basicAuthMiddleware(next http.HandlerFunc) http.Handle
 
 // Start starts the web server
 func (s *DashboardServer) Start() error {
+	// Start background data fetching
+	s.startBackgroundDataFetching()
+
 	mux := http.NewServeMux()
 
 	// Serve static files
@@ -90,9 +132,6 @@ func (s *DashboardServer) Start() error {
 
 	// Dashboard route
 	mux.HandleFunc("/", s.basicAuthMiddleware(s.handleDashboard))
-
-	// API routes for metrics
-	mux.HandleFunc("/api/metrics", s.basicAuthMiddleware(s.handleMetrics))
 
 	s.httpServer = &http.Server{
 		Addr:    ":" + strconv.Itoa(s.port),
@@ -104,6 +143,8 @@ func (s *DashboardServer) Start() error {
 	for _, config := range s.nodeConfigs {
 		fmt.Printf("  - %s: %s\n", config.Name, config.URL)
 	}
+	fmt.Printf("Data fetch frequency: %d seconds\n", s.dataFetchFrequency)
+	fmt.Printf("Dashboard update frequency: %d seconds\n", s.updateFrequency)
 
 	return s.httpServer.ListenAndServe()
 }
@@ -120,29 +161,19 @@ func (s *DashboardServer) Stop() error {
 func (s *DashboardServer) handleDashboard(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/html")
 
+	// Get cached metrics data
+	cachedMetrics := s.getCachedMetrics()
+
 	templateData := struct {
 		UpdateFrequency int
+		Metrics         *metrics.MultiNodeMetrics
 	}{
 		UpdateFrequency: s.updateFrequency,
+		Metrics:         cachedMetrics,
 	}
 
 	if err := s.template.Execute(w, templateData); err != nil {
 		http.Error(w, fmt.Sprintf("Failed to execute template: %v", err), http.StatusInternalServerError)
-		return
-	}
-}
-
-// handleMetrics serves the metrics API endpoint
-func (s *DashboardServer) handleMetrics(w http.ResponseWriter, r *http.Request) {
-	multiNodeMetrics, err := s.metricsCollector.GetMetrics()
-	if err != nil {
-		http.Error(w, fmt.Sprintf("Failed to get metrics: %v", err), http.StatusInternalServerError)
-		return
-	}
-
-	w.Header().Set("Content-Type", "application/json")
-	if err := json.NewEncoder(w).Encode(multiNodeMetrics); err != nil {
-		http.Error(w, fmt.Sprintf("Failed to encode metrics: %v", err), http.StatusInternalServerError)
 		return
 	}
 }

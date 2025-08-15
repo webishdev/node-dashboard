@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/webishdev/node_dashboard/internal/metrics"
+	"github.com/webishdev/node-dashboard/internal/metrics"
 )
 
 // ChartConfig holds configuration for SVG chart generation

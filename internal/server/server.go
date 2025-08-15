@@ -10,7 +10,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/webishdev/node_dashboard/internal/metrics"
+	"github.com/webishdev/node-dashboard/internal/metrics"
 )
 
 //go:embed templates/dashboard.html

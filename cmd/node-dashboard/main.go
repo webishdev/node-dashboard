@@ -6,8 +6,8 @@ import (
 	"strings"
 
 	"github.com/spf13/cobra"
-	"github.com/webishdev/node_dashboard/internal/metrics"
-	"github.com/webishdev/node_dashboard/internal/server"
+	"github.com/webishdev/node-dashboard/internal/metrics"
+	"github.com/webishdev/node-dashboard/internal/server"
 )
 
 var (

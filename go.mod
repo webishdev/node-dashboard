@@ -1,4 +1,4 @@
-module github.com/webishdev/node_dashboard
+module github.com/webishdev/node-dashboard
 
 go 1.25
 

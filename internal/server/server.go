@@ -36,14 +36,23 @@ type DashboardServer struct {
 	authPassword       string
 	cachedMetrics      *metrics.MultiNodeMetrics
 	metricsMutex       sync.RWMutex
+	historicalStore    *metrics.HistoricalStore
 }
 
 // New creates a new dashboard server instance
 func New(port int, nodeConfigs []metrics.NodeConfig, updateFrequency int, dataFetchFrequency int, enableAuth bool, authUser, authPassword string) Server {
-	tmpl, err := template.New("dashboard").Parse(templateContent)
+	// Create template with custom functions
+	funcMap := template.FuncMap{
+		"generateChart": generateChartForTemplate,
+	}
+
+	tmpl, err := template.New("dashboard").Funcs(funcMap).Parse(templateContent)
 	if err != nil {
 		panic(fmt.Sprintf("Failed to parse template: %v", err))
 	}
+
+	// Store up to 100 historical data points (about 50 minutes at 30s intervals)
+	maxHistoricalPoints := 100
 
 	return &DashboardServer{
 		port:               port,
@@ -55,7 +64,20 @@ func New(port int, nodeConfigs []metrics.NodeConfig, updateFrequency int, dataFe
 		enableAuth:         enableAuth,
 		authUser:           authUser,
 		authPassword:       authPassword,
+		historicalStore:    metrics.NewHistoricalStore(maxHistoricalPoints),
 	}
+}
+
+// generateChartForTemplate is a template function that generates SVG charts
+func generateChartForTemplate(dataPoints []metrics.DataPoint, metricType string) template.HTML {
+	configs := GetChartConfigs()
+	config, exists := configs[metricType]
+	if !exists {
+		config = ChartConfig{Width: 200, Height: 60, Color: "#6B7280"}
+	}
+
+	svg := GenerateSVGLineChart(dataPoints, config)
+	return template.HTML(svg)
 }
 
 // startBackgroundDataFetching starts a goroutine that periodically fetches metrics
@@ -78,6 +100,13 @@ func (s *DashboardServer) fetchAndCacheMetrics() {
 	if err != nil {
 		fmt.Printf("Error fetching metrics: %v\n", err)
 		return
+	}
+
+	// Store historical data points for each node
+	for _, node := range metrics.Nodes {
+		if node.Data != nil {
+			s.historicalStore.AddDataPoint(node.Name, node.Data)
+		}
 	}
 
 	s.metricsMutex.Lock()
@@ -164,12 +193,17 @@ func (s *DashboardServer) handleDashboard(w http.ResponseWriter, r *http.Request
 	// Get cached metrics data
 	cachedMetrics := s.getCachedMetrics()
 
+	// Get historical data for all nodes
+	historicalData := s.historicalStore.GetAllHistoricalData()
+
 	templateData := struct {
 		UpdateFrequency int
 		Metrics         *metrics.MultiNodeMetrics
+		HistoricalData  map[string]*metrics.HistoricalMetrics
 	}{
 		UpdateFrequency: s.updateFrequency,
 		Metrics:         cachedMetrics,
+		HistoricalData:  historicalData,
 	}
 
 	if err := s.template.Execute(w, templateData); err != nil {

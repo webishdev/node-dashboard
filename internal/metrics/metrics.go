@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -20,6 +21,26 @@ type MetricsData struct {
 	DiskSizeGB  float64 `json:"disk_size_gb"`
 	NodeName    string  `json:"node_name"`
 	OSName      string  `json:"os_name"`
+}
+
+// DataPoint represents a single metric data point with timestamp
+type DataPoint struct {
+	Timestamp time.Time `json:"timestamp"`
+	Value     float64   `json:"value"`
+}
+
+// HistoricalMetrics represents historical data for a single metric type
+type HistoricalMetrics struct {
+	CPU    []DataPoint `json:"cpu"`
+	Memory []DataPoint `json:"memory"`
+	Disk   []DataPoint `json:"disk"`
+}
+
+// HistoricalStore manages historical data for all nodes
+type HistoricalStore struct {
+	data      map[string]*HistoricalMetrics // key is node name
+	mutex     sync.RWMutex
+	maxPoints int
 }
 
 // NodeMetrics represents metrics for a single node
@@ -308,4 +329,82 @@ func roundToDecimal(value float64, decimals int) float64 {
 		multiplier *= 10
 	}
 	return float64(int(value*multiplier+0.5)) / multiplier
+}
+
+// NewHistoricalStore creates a new historical data store
+func NewHistoricalStore(maxPoints int) *HistoricalStore {
+	return &HistoricalStore{
+		data:      make(map[string]*HistoricalMetrics),
+		maxPoints: maxPoints,
+	}
+}
+
+// AddDataPoint adds a new data point for a specific node
+func (hs *HistoricalStore) AddDataPoint(nodeName string, metricsData *MetricsData) {
+	hs.mutex.Lock()
+	defer hs.mutex.Unlock()
+
+	// Initialize historical metrics for new nodes
+	if hs.data[nodeName] == nil {
+		hs.data[nodeName] = &HistoricalMetrics{
+			CPU:    make([]DataPoint, 0),
+			Memory: make([]DataPoint, 0),
+			Disk:   make([]DataPoint, 0),
+		}
+	}
+
+	now := time.Now()
+	historical := hs.data[nodeName]
+
+	// Add new data points
+	historical.CPU = append(historical.CPU, DataPoint{Timestamp: now, Value: metricsData.CPU})
+	historical.Memory = append(historical.Memory, DataPoint{Timestamp: now, Value: metricsData.Memory})
+	historical.Disk = append(historical.Disk, DataPoint{Timestamp: now, Value: metricsData.Disk})
+
+	// Trim to max points if necessary
+	if len(historical.CPU) > hs.maxPoints {
+		historical.CPU = historical.CPU[len(historical.CPU)-hs.maxPoints:]
+	}
+	if len(historical.Memory) > hs.maxPoints {
+		historical.Memory = historical.Memory[len(historical.Memory)-hs.maxPoints:]
+	}
+	if len(historical.Disk) > hs.maxPoints {
+		historical.Disk = historical.Disk[len(historical.Disk)-hs.maxPoints:]
+	}
+}
+
+// GetHistoricalData returns historical data for a specific node
+func (hs *HistoricalStore) GetHistoricalData(nodeName string) *HistoricalMetrics {
+	hs.mutex.RLock()
+	defer hs.mutex.RUnlock()
+
+	if data, exists := hs.data[nodeName]; exists {
+		// Return a copy to avoid race conditions
+		return &HistoricalMetrics{
+			CPU:    append([]DataPoint(nil), data.CPU...),
+			Memory: append([]DataPoint(nil), data.Memory...),
+			Disk:   append([]DataPoint(nil), data.Disk...),
+		}
+	}
+	return &HistoricalMetrics{
+		CPU:    make([]DataPoint, 0),
+		Memory: make([]DataPoint, 0),
+		Disk:   make([]DataPoint, 0),
+	}
+}
+
+// GetAllHistoricalData returns historical data for all nodes
+func (hs *HistoricalStore) GetAllHistoricalData() map[string]*HistoricalMetrics {
+	hs.mutex.RLock()
+	defer hs.mutex.RUnlock()
+
+	result := make(map[string]*HistoricalMetrics)
+	for nodeName, data := range hs.data {
+		result[nodeName] = &HistoricalMetrics{
+			CPU:    append([]DataPoint(nil), data.CPU...),
+			Memory: append([]DataPoint(nil), data.Memory...),
+			Disk:   append([]DataPoint(nil), data.Disk...),
+		}
+	}
+	return result
 }

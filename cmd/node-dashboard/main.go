@@ -68,8 +68,8 @@ func init() {
 	// Define flags for configuration
 	rootCmd.Flags().IntVarP(&port, "port", "p", 8080, "Port to listen on")
 	rootCmd.Flags().StringSliceVarP(&nodeExporterAddrs, "node-exporter", "n", []string{}, "Node exporter addresses (URLs only)")
-	rootCmd.Flags().IntVarP(&updateFrequency, "update-frequency", "u", 30, "Dashboard update frequency in seconds")
-	rootCmd.Flags().IntVarP(&dataFetchFrequency, "data-fetch-frequency", "d", 30, "Node exporter data fetch frequency in seconds")
+	rootCmd.Flags().IntVarP(&updateFrequency, "update-frequency", "u", 10, "Dashboard update frequency in seconds")
+	rootCmd.Flags().IntVarP(&dataFetchFrequency, "data-fetch-frequency", "d", 5, "Node exporter data fetch frequency in seconds")
 	rootCmd.Flags().BoolVar(&enableAuth, "enable-auth", false, "Enable basic authentication")
 	rootCmd.Flags().StringVar(&authUser, "auth-user", "", "Username for basic authentication (required when auth is enabled)")
 	rootCmd.Flags().StringVar(&authPassword, "auth-password", "", "Password for basic authentication (required when auth is enabled)")

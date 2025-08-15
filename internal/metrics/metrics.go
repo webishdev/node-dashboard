@@ -1,14 +1,13 @@
 package metrics
 
 import (
-	"bufio"
 	"fmt"
 	"io"
 	"net/http"
-	"strconv"
-	"strings"
 	"sync"
 	"time"
+
+	"github.com/prometheus/common/expfmt"
 )
 
 // MetricsData represents the system metrics
@@ -120,7 +119,7 @@ func (c *MultiNodeExporterCollector) GetMetrics() (*MultiNodeMetrics, error) {
 			fmt.Printf("Error fetching metrics from %s: %v\n", config.URL, err)
 			// Add empty metrics for failed nodes with fallback name
 			nodeMetrics = append(nodeMetrics, NodeMetrics{
-				Name: fmt.Sprintf("Node-%s", config.URL),
+				Name: fmt.Sprintf("%s", config.URL),
 				Data: &MetricsData{CPU: 0, Memory: 0, Disk: 0, CPUCores: 0, MaxMemoryMB: 0, DiskSizeGB: 0, NodeName: "Unknown", OSName: "Unknown"},
 			})
 			continue
@@ -129,7 +128,7 @@ func (c *MultiNodeExporterCollector) GetMetrics() (*MultiNodeMetrics, error) {
 		// Use NodeName from metrics data, fallback to URL if empty
 		nodeName := data.NodeName
 		if nodeName == "" {
-			nodeName = fmt.Sprintf("Node-%s", config.URL)
+			nodeName = fmt.Sprintf("%s", config.URL)
 		}
 
 		nodeMetrics = append(nodeMetrics, NodeMetrics{
@@ -161,9 +160,13 @@ func (c *NodeExporterCollector) GetMetrics() (*MetricsData, error) {
 	return metrics, nil
 }
 
-// parseMetrics parses Prometheus metrics format
+// parseMetrics parses Prometheus metrics format using expfmt
 func (c *NodeExporterCollector) parseMetrics(reader io.Reader) (*MetricsData, error) {
-	scanner := bufio.NewScanner(reader)
+	var parser expfmt.TextParser
+	metricFamilies, err := parser.TextToMetricFamilies(reader)
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse prometheus metrics: %w", err)
+	}
 
 	var cpuIdle float64
 	var memTotal, memAvailable float64
@@ -172,76 +175,91 @@ func (c *NodeExporterCollector) parseMetrics(reader io.Reader) (*MetricsData, er
 	var cpuCores int
 	cpuCoreMap := make(map[string]bool) // Track unique CPU cores
 
-	for scanner.Scan() {
-		line := strings.TrimSpace(scanner.Text())
-
-		// Skip comments and empty lines
-		if strings.HasPrefix(line, "#") || line == "" {
-			continue
-		}
-
-		// Parse CPU idle time (we'll calculate usage from this)
-		if strings.HasPrefix(line, "node_cpu_seconds_total{") && strings.Contains(line, `mode="idle"`) {
-			if value := extractMetricValue(line); value != -1 {
-				cpuIdle = value
+	// Parse CPU metrics
+	if cpuFamily, exists := metricFamilies["node_cpu_seconds_total"]; exists {
+		for _, metric := range cpuFamily.GetMetric() {
+			labels := make(map[string]string)
+			for _, label := range metric.GetLabel() {
+				labels[*label.Name] = *label.Value
 			}
-		}
 
-		// Count unique CPU cores
-		if strings.HasPrefix(line, "node_cpu_seconds_total{") {
-			cpuCore := extractLabelValue(line, "cpu")
-			if cpuCore != "" {
-				cpuCoreMap[cpuCore] = true
+			// Count unique CPU cores
+			if cpu, exists := labels["cpu"]; exists {
+				cpuCoreMap[cpu] = true
 			}
-		}
 
-		// Parse memory metrics with validation
-		if strings.HasPrefix(line, "node_memory_MemTotal_bytes") {
-			// Validate the metric line format
-			if !strings.Contains(line, " ") {
-				continue // Skip invalid format
+			// Get idle CPU time
+			if mode, exists := labels["mode"]; exists && mode == "idle" {
+				cpuIdle = *metric.Counter.Value
 			}
-			if value := extractMetricValue(line); value != -1 {
-				memTotal = value
-			}
-		}
-
-		if strings.HasPrefix(line, "node_memory_MemAvailable_bytes") {
-			// Validate the metric line format
-			if !strings.Contains(line, " ") {
-				continue // Skip invalid format
-			}
-			if value := extractMetricValue(line); value != -1 {
-				memAvailable = value
-			}
-		}
-
-		// Parse filesystem metrics (root filesystem)
-		if strings.HasPrefix(line, "node_filesystem_size_bytes{") && strings.Contains(line, `mountpoint="/"`) {
-			if value := extractMetricValue(line); value != -1 {
-				diskTotal = value
-			}
-		}
-
-		if strings.HasPrefix(line, "node_filesystem_free_bytes{") && strings.Contains(line, `mountpoint="/"`) {
-			if value := extractMetricValue(line); value != -1 {
-				diskFree = value
-			}
-		}
-
-		// Parse node_uname_info for node name
-		if strings.HasPrefix(line, "node_uname_info{") {
-			nodeName = extractLabelValue(line, "nodename")
-		}
-
-		// Parse node_os_info for OS name
-		if strings.HasPrefix(line, "node_os_info{") {
-			osName = extractLabelValue(line, "name")
 		}
 	}
 
-	if err := scanner.Err(); err != nil {
-		return nil, err
+	// Parse memory metrics
+	if memTotalFamily, exists := metricFamilies["node_memory_MemTotal_bytes"]; exists {
+		for _, metric := range memTotalFamily.GetMetric() {
+			memTotal = *metric.Gauge.Value
+			break
+		}
+	}
+
+	if memAvailableFamily, exists := metricFamilies["node_memory_MemAvailable_bytes"]; exists {
+		for _, metric := range memAvailableFamily.GetMetric() {
+			memAvailable = *metric.Gauge.Value
+			break
+		}
+	}
+
+	// Parse filesystem metrics (root filesystem)
+	if fsFamily, exists := metricFamilies["node_filesystem_size_bytes"]; exists {
+		for _, metric := range fsFamily.GetMetric() {
+			labels := make(map[string]string)
+			for _, label := range metric.GetLabel() {
+				labels[*label.Name] = *label.Value
+			}
+			if mountpoint, exists := labels["mountpoint"]; exists && mountpoint == "/" {
+				diskTotal = *metric.Gauge.Value
+				break
+			}
+		}
+	}
+
+	if fsFreeFamily, exists := metricFamilies["node_filesystem_free_bytes"]; exists {
+		for _, metric := range fsFreeFamily.GetMetric() {
+			labels := make(map[string]string)
+			for _, label := range metric.GetLabel() {
+				labels[*label.Name] = *label.Value
+			}
+			if mountpoint, exists := labels["mountpoint"]; exists && mountpoint == "/" {
+				diskFree = *metric.Gauge.Value
+				break
+			}
+		}
+	}
+
+	// Parse node info
+	if unameFamily, exists := metricFamilies["node_uname_info"]; exists {
+		for _, metric := range unameFamily.GetMetric() {
+			for _, label := range metric.GetLabel() {
+				if *label.Name == "nodename" {
+					nodeName = *label.Value
+					break
+				}
+			}
+			break
+		}
+	}
+
+	if osFamily, exists := metricFamilies["node_os_info"]; exists {
+		for _, metric := range osFamily.GetMetric() {
+			for _, label := range metric.GetLabel() {
+				if *label.Name == "name" {
+					osName = *label.Value
+					break
+				}
+			}
+			break
+		}
 	}
 
 	// Calculate percentages and additional metrics
@@ -287,39 +305,6 @@ func (c *NodeExporterCollector) parseMetrics(reader io.Reader) (*MetricsData, er
 		NodeName:    nodeName,
 		OSName:      osName,
 	}, nil
-}
-
-// extractMetricValue extracts the numeric value from a Prometheus metric line
-func extractMetricValue(line string) float64 {
-	parts := strings.Fields(line)
-	if len(parts) < 2 {
-		return -1
-	}
-
-	value, err := strconv.ParseFloat(parts[len(parts)-1], 64)
-	if err != nil {
-		return -1
-	}
-
-	return value
-}
-
-// extractLabelValue extracts a label value from a Prometheus metric line
-func extractLabelValue(line, labelName string) string {
-	// Look for labelName="value" pattern
-	pattern := labelName + `="`
-	startIdx := strings.Index(line, pattern)
-	if startIdx == -1 {
-		return ""
-	}
-
-	startIdx += len(pattern)
-	endIdx := strings.Index(line[startIdx:], `"`)
-	if endIdx == -1 {
-		return ""
-	}
-
-	return line[startIdx : startIdx+endIdx]
 }
 
 // roundToDecimal rounds a float64 to specified decimal places

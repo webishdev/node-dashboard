@@ -12,11 +12,14 @@ import (
 
 // MetricsData represents the system metrics
 type MetricsData struct {
-	CPU      float64 `json:"cpu"`
-	Memory   float64 `json:"memory"`
-	Disk     float64 `json:"disk"`
-	NodeName string  `json:"node_name"`
-	OSName   string  `json:"os_name"`
+	CPU         float64 `json:"cpu"`
+	Memory      float64 `json:"memory"`
+	Disk        float64 `json:"disk"`
+	CPUCores    int     `json:"cpu_cores"`
+	MaxMemoryMB float64 `json:"max_memory_mb"`
+	DiskSizeGB  float64 `json:"disk_size_gb"`
+	NodeName    string  `json:"node_name"`
+	OSName      string  `json:"os_name"`
 }
 
 // NodeMetrics represents metrics for a single node
@@ -97,7 +100,7 @@ func (c *MultiNodeExporterCollector) GetMetrics() (*MultiNodeMetrics, error) {
 			// Add empty metrics for failed nodes with fallback name
 			nodeMetrics = append(nodeMetrics, NodeMetrics{
 				Name: fmt.Sprintf("Node-%s", config.URL),
-				Data: &MetricsData{CPU: 0, Memory: 0, Disk: 0, NodeName: "Unknown", OSName: "Unknown"},
+				Data: &MetricsData{CPU: 0, Memory: 0, Disk: 0, CPUCores: 0, MaxMemoryMB: 0, DiskSizeGB: 0, NodeName: "Unknown", OSName: "Unknown"},
 			})
 			continue
 		}
@@ -145,6 +148,8 @@ func (c *NodeExporterCollector) parseMetrics(reader io.Reader) (*MetricsData, er
 	var memTotal, memAvailable float64
 	var diskTotal, diskFree float64
 	var nodeName, osName string
+	var cpuCores int
+	cpuCoreMap := make(map[string]bool) // Track unique CPU cores
 
 	for scanner.Scan() {
 		line := strings.TrimSpace(scanner.Text())
@@ -161,14 +166,30 @@ func (c *NodeExporterCollector) parseMetrics(reader io.Reader) (*MetricsData, er
 			}
 		}
 
-		// Parse memory metrics
+		// Count unique CPU cores
+		if strings.HasPrefix(line, "node_cpu_seconds_total{") {
+			cpuCore := extractLabelValue(line, "cpu")
+			if cpuCore != "" {
+				cpuCoreMap[cpuCore] = true
+			}
+		}
+
+		// Parse memory metrics with validation
 		if strings.HasPrefix(line, "node_memory_MemTotal_bytes") {
+			// Validate the metric line format
+			if !strings.Contains(line, " ") {
+				continue // Skip invalid format
+			}
 			if value := extractMetricValue(line); value != -1 {
 				memTotal = value
 			}
 		}
 
 		if strings.HasPrefix(line, "node_memory_MemAvailable_bytes") {
+			// Validate the metric line format
+			if !strings.Contains(line, " ") {
+				continue // Skip invalid format
+			}
 			if value := extractMetricValue(line); value != -1 {
 				memAvailable = value
 			}
@@ -202,8 +223,11 @@ func (c *NodeExporterCollector) parseMetrics(reader io.Reader) (*MetricsData, er
 		return nil, err
 	}
 
-	// Calculate percentages
+	// Calculate percentages and additional metrics
 	var cpuUsage, memUsage, diskUsage float64
+
+	// Count CPU cores
+	cpuCores = len(cpuCoreMap)
 
 	// CPU usage is approximated (this is simplified - real calculation would need multiple samples)
 	if cpuIdle > 0 {
@@ -228,12 +252,19 @@ func (c *NodeExporterCollector) parseMetrics(reader io.Reader) (*MetricsData, er
 		diskUsage = (diskUsed / diskTotal) * 100
 	}
 
+	// Convert bytes to MB and GB
+	maxMemoryMB := memTotal / (1024 * 1024)
+	diskSizeGB := diskTotal / (1024 * 1024 * 1024)
+
 	return &MetricsData{
-		CPU:      roundToDecimal(cpuUsage, 1),
-		Memory:   roundToDecimal(memUsage, 1),
-		Disk:     roundToDecimal(diskUsage, 1),
-		NodeName: nodeName,
-		OSName:   osName,
+		CPU:         roundToDecimal(cpuUsage, 1),
+		Memory:      roundToDecimal(memUsage, 1),
+		Disk:        roundToDecimal(diskUsage, 1),
+		CPUCores:    cpuCores,
+		MaxMemoryMB: roundToDecimal(maxMemoryMB, 0),
+		DiskSizeGB:  roundToDecimal(diskSizeGB, 1),
+		NodeName:    nodeName,
+		OSName:      osName,
 	}, nil
 }
 

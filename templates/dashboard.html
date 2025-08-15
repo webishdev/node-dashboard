@@ -46,13 +46,14 @@
 
         section.innerHTML = `
                 <h2 class="text-xl font-semibold text-gray-700 mb-4">${node.name}</h2>
-                <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
+                <div class="grid grid-cols-1 md:grid-cols-3 gap-6 mb-6">
                     <!-- CPU Usage Card -->
                     <div class="bg-white rounded-lg shadow-md p-6">
                         <div class="flex items-center justify-between">
                             <div>
                                 <p class="text-sm font-medium text-gray-600">CPU Usage</p>
                                 <p class="text-2xl font-bold text-blue-600">${node.data.cpu}%</p>
+                                <p class="text-xs text-gray-500">${node.data.cpu_cores} cores</p>
                             </div>
                             <div class="p-3 bg-blue-100 rounded-full">
                                 <svg class="w-6 h-6 text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -68,6 +69,7 @@
                             <div>
                                 <p class="text-sm font-medium text-gray-600">Memory Usage</p>
                                 <p class="text-2xl font-bold text-green-600">${node.data.memory}%</p>
+                                <p class="text-xs text-gray-500">${node.data.max_memory_mb} MB total</p>
                             </div>
                             <div class="p-3 bg-green-100 rounded-full">
                                 <svg class="w-6 h-6 text-green-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -83,6 +85,7 @@
                             <div>
                                 <p class="text-sm font-medium text-gray-600">Disk Usage</p>
                                 <p class="text-2xl font-bold text-purple-600">${node.data.disk}%</p>
+                                <p class="text-xs text-gray-500">${node.data.disk_size_gb} GB total</p>
                             </div>
                             <div class="p-3 bg-purple-100 rounded-full">
                                 <svg class="w-6 h-6 text-purple-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">

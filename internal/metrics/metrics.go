@@ -12,9 +12,11 @@ import (
 
 // MetricsData represents the system metrics
 type MetricsData struct {
-	CPU    float64 `json:"cpu"`
-	Memory float64 `json:"memory"`
-	Disk   float64 `json:"disk"`
+	CPU      float64 `json:"cpu"`
+	Memory   float64 `json:"memory"`
+	Disk     float64 `json:"disk"`
+	NodeName string  `json:"node_name"`
+	OSName   string  `json:"os_name"`
 }
 
 // NodeMetrics represents metrics for a single node
@@ -91,17 +93,23 @@ func (c *MultiNodeExporterCollector) GetMetrics() (*MultiNodeMetrics, error) {
 		data, err := singleCollector.GetMetrics()
 		if err != nil {
 			// Log error but continue with other nodes
-			fmt.Printf("Error fetching metrics from %s (%s): %v\n", config.Name, config.URL, err)
-			// Add empty metrics for failed nodes
+			fmt.Printf("Error fetching metrics from %s: %v\n", config.URL, err)
+			// Add empty metrics for failed nodes with fallback name
 			nodeMetrics = append(nodeMetrics, NodeMetrics{
-				Name: config.Name,
-				Data: &MetricsData{CPU: 0, Memory: 0, Disk: 0},
+				Name: fmt.Sprintf("Node-%s", config.URL),
+				Data: &MetricsData{CPU: 0, Memory: 0, Disk: 0, NodeName: "Unknown", OSName: "Unknown"},
 			})
 			continue
 		}
 
+		// Use NodeName from metrics data, fallback to URL if empty
+		nodeName := data.NodeName
+		if nodeName == "" {
+			nodeName = fmt.Sprintf("Node-%s", config.URL)
+		}
+
 		nodeMetrics = append(nodeMetrics, NodeMetrics{
-			Name: config.Name,
+			Name: nodeName,
 			Data: data,
 		})
 	}
@@ -136,6 +144,7 @@ func (c *NodeExporterCollector) parseMetrics(reader io.Reader) (*MetricsData, er
 	var cpuIdle float64
 	var memTotal, memAvailable float64
 	var diskTotal, diskFree float64
+	var nodeName, osName string
 
 	for scanner.Scan() {
 		line := strings.TrimSpace(scanner.Text())
@@ -177,6 +186,16 @@ func (c *NodeExporterCollector) parseMetrics(reader io.Reader) (*MetricsData, er
 				diskFree = value
 			}
 		}
+
+		// Parse node_uname_info for node name
+		if strings.HasPrefix(line, "node_uname_info{") {
+			nodeName = extractLabelValue(line, "nodename")
+		}
+
+		// Parse node_os_info for OS name
+		if strings.HasPrefix(line, "node_os_info{") {
+			osName = extractLabelValue(line, "name")
+		}
 	}
 
 	if err := scanner.Err(); err != nil {
@@ -210,9 +229,11 @@ func (c *NodeExporterCollector) parseMetrics(reader io.Reader) (*MetricsData, er
 	}
 
 	return &MetricsData{
-		CPU:    roundToDecimal(cpuUsage, 1),
-		Memory: roundToDecimal(memUsage, 1),
-		Disk:   roundToDecimal(diskUsage, 1),
+		CPU:      roundToDecimal(cpuUsage, 1),
+		Memory:   roundToDecimal(memUsage, 1),
+		Disk:     roundToDecimal(diskUsage, 1),
+		NodeName: nodeName,
+		OSName:   osName,
 	}, nil
 }
 
@@ -229,6 +250,24 @@ func extractMetricValue(line string) float64 {
 	}
 
 	return value
+}
+
+// extractLabelValue extracts a label value from a Prometheus metric line
+func extractLabelValue(line, labelName string) string {
+	// Look for labelName="value" pattern
+	pattern := labelName + `="`
+	startIdx := strings.Index(line, pattern)
+	if startIdx == -1 {
+		return ""
+	}
+
+	startIdx += len(pattern)
+	endIdx := strings.Index(line[startIdx:], `"`)
+	if endIdx == -1 {
+		return ""
+	}
+
+	return line[startIdx : startIdx+endIdx]
 }
 
 // roundToDecimal rounds a float64 to specified decimal places

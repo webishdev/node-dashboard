@@ -23,10 +23,11 @@ type DashboardServer struct {
 	httpServer       *http.Server
 	metricsCollector metrics.MultiNodeCollector
 	template         *template.Template
+	updateFrequency  int
 }
 
 // New creates a new dashboard server instance
-func New(port int, nodeConfigs []metrics.NodeConfig) Server {
+func New(port int, nodeConfigs []metrics.NodeConfig, updateFrequency int) Server {
 	tmpl, err := template.ParseFiles("templates/dashboard.html")
 	if err != nil {
 		panic(fmt.Sprintf("Failed to parse template: %v", err))
@@ -37,6 +38,7 @@ func New(port int, nodeConfigs []metrics.NodeConfig) Server {
 		nodeConfigs:      nodeConfigs,
 		metricsCollector: metrics.NewMultiNodeCollector(nodeConfigs),
 		template:         tmpl,
+		updateFrequency:  updateFrequency,
 	}
 }
 
@@ -79,7 +81,13 @@ func (s *DashboardServer) Stop() error {
 func (s *DashboardServer) handleDashboard(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/html")
 
-	if err := s.template.Execute(w, nil); err != nil {
+	templateData := struct {
+		UpdateFrequency int
+	}{
+		UpdateFrequency: s.updateFrequency,
+	}
+
+	if err := s.template.Execute(w, templateData); err != nil {
 		http.Error(w, fmt.Sprintf("Failed to execute template: %v", err), http.StatusInternalServerError)
 		return
 	}

@@ -1,6 +1,7 @@
 package server
 
 import (
+	"crypto/subtle"
 	"encoding/json"
 	"fmt"
 	"html/template"
@@ -24,10 +25,13 @@ type DashboardServer struct {
 	metricsCollector metrics.MultiNodeCollector
 	template         *template.Template
 	updateFrequency  int
+	enableAuth       bool
+	authUser         string
+	authPassword     string
 }
 
 // New creates a new dashboard server instance
-func New(port int, nodeConfigs []metrics.NodeConfig, updateFrequency int) Server {
+func New(port int, nodeConfigs []metrics.NodeConfig, updateFrequency int, enableAuth bool, authUser, authPassword string) Server {
 	tmpl, err := template.ParseFiles("templates/dashboard.html")
 	if err != nil {
 		panic(fmt.Sprintf("Failed to parse template: %v", err))
@@ -39,6 +43,37 @@ func New(port int, nodeConfigs []metrics.NodeConfig, updateFrequency int) Server
 		metricsCollector: metrics.NewMultiNodeCollector(nodeConfigs),
 		template:         tmpl,
 		updateFrequency:  updateFrequency,
+		enableAuth:       enableAuth,
+		authUser:         authUser,
+		authPassword:     authPassword,
+	}
+}
+
+// basicAuthMiddleware provides HTTP basic authentication
+func (s *DashboardServer) basicAuthMiddleware(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if !s.enableAuth {
+			next(w, r)
+			return
+		}
+
+		user, pass, ok := r.BasicAuth()
+		if !ok {
+			w.Header().Set("WWW-Authenticate", `Basic realm="Node Dashboard"`)
+			http.Error(w, "Unauthorized", http.StatusUnauthorized)
+			return
+		}
+
+		userMatch := subtle.ConstantTimeCompare([]byte(user), []byte(s.authUser)) == 1
+		passMatch := subtle.ConstantTimeCompare([]byte(pass), []byte(s.authPassword)) == 1
+
+		if !userMatch || !passMatch {
+			w.Header().Set("WWW-Authenticate", `Basic realm="Node Dashboard"`)
+			http.Error(w, "Unauthorized", http.StatusUnauthorized)
+			return
+		}
+
+		next(w, r)
 	}
 }
 
@@ -50,10 +85,10 @@ func (s *DashboardServer) Start() error {
 	mux.Handle("/static/", http.StripPrefix("/static/", http.FileServer(http.Dir("web/static/"))))
 
 	// Dashboard route
-	mux.HandleFunc("/", s.handleDashboard)
+	mux.HandleFunc("/", s.basicAuthMiddleware(s.handleDashboard))
 
 	// API routes for metrics
-	mux.HandleFunc("/api/metrics", s.handleMetrics)
+	mux.HandleFunc("/api/metrics", s.basicAuthMiddleware(s.handleMetrics))
 
 	s.httpServer = &http.Server{
 		Addr:    ":" + strconv.Itoa(s.port),

@@ -36,6 +36,7 @@ run: build
 clean:
 	@echo "Cleaning build artifacts..."
 	rm -rf $(BUILD_DIR)
+	rm -f node-dashboard
 	@echo "Clean complete"
 
 # Install dependencies

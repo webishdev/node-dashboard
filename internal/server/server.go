@@ -2,6 +2,7 @@ package server
 
 import (
 	"crypto/subtle"
+	_ "embed"
 	"encoding/json"
 	"fmt"
 	"html/template"
@@ -10,6 +11,9 @@ import (
 
 	"github.com/webishdev/node_dashboard/internal/metrics"
 )
+
+//go:embed templates/dashboard.html
+var templateContent string
 
 // Server represents the web server interface
 type Server interface {
@@ -32,7 +36,7 @@ type DashboardServer struct {
 
 // New creates a new dashboard server instance
 func New(port int, nodeConfigs []metrics.NodeConfig, updateFrequency int, enableAuth bool, authUser, authPassword string) Server {
-	tmpl, err := template.ParseFiles("templates/dashboard.html")
+	tmpl, err := template.New("dashboard").Parse(templateContent)
 	if err != nil {
 		panic(fmt.Sprintf("Failed to parse template: %v", err))
 	}

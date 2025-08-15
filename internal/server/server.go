@@ -19,14 +19,14 @@ type Server interface {
 // DashboardServer implements the Server interface
 type DashboardServer struct {
 	port             int
-	nodeExporterAddr string
+	nodeConfigs      []metrics.NodeConfig
 	httpServer       *http.Server
-	metricsCollector metrics.Collector
+	metricsCollector metrics.MultiNodeCollector
 	template         *template.Template
 }
 
 // New creates a new dashboard server instance
-func New(port int, nodeExporterAddr string) Server {
+func New(port int, nodeConfigs []metrics.NodeConfig) Server {
 	tmpl, err := template.ParseFiles("templates/dashboard.html")
 	if err != nil {
 		panic(fmt.Sprintf("Failed to parse template: %v", err))
@@ -34,8 +34,8 @@ func New(port int, nodeExporterAddr string) Server {
 
 	return &DashboardServer{
 		port:             port,
-		nodeExporterAddr: nodeExporterAddr,
-		metricsCollector: metrics.NewCollector(nodeExporterAddr),
+		nodeConfigs:      nodeConfigs,
+		metricsCollector: metrics.NewMultiNodeCollector(nodeConfigs),
 		template:         tmpl,
 	}
 }
@@ -59,7 +59,10 @@ func (s *DashboardServer) Start() error {
 	}
 
 	fmt.Printf("Starting server on port %d\n", s.port)
-	fmt.Printf("Node exporter address: %s\n", s.nodeExporterAddr)
+	fmt.Printf("Node exporters configured: %d\n", len(s.nodeConfigs))
+	for _, config := range s.nodeConfigs {
+		fmt.Printf("  - %s: %s\n", config.Name, config.URL)
+	}
 
 	return s.httpServer.ListenAndServe()
 }
@@ -84,14 +87,14 @@ func (s *DashboardServer) handleDashboard(w http.ResponseWriter, r *http.Request
 
 // handleMetrics serves the metrics API endpoint
 func (s *DashboardServer) handleMetrics(w http.ResponseWriter, r *http.Request) {
-	metricsData, err := s.metricsCollector.GetMetrics()
+	multiNodeMetrics, err := s.metricsCollector.GetMetrics()
 	if err != nil {
 		http.Error(w, fmt.Sprintf("Failed to get metrics: %v", err), http.StatusInternalServerError)
 		return
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	if err := json.NewEncoder(w).Encode(metricsData); err != nil {
+	if err := json.NewEncoder(w).Encode(multiNodeMetrics); err != nil {
 		http.Error(w, fmt.Sprintf("Failed to encode metrics: %v", err), http.StatusInternalServerError)
 		return
 	}

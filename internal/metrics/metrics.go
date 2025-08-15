@@ -17,15 +17,43 @@ type MetricsData struct {
 	Disk   float64 `json:"disk"`
 }
 
+// NodeMetrics represents metrics for a single node
+type NodeMetrics struct {
+	Name string       `json:"name"`
+	Data *MetricsData `json:"data"`
+}
+
+// MultiNodeMetrics represents metrics for multiple nodes
+type MultiNodeMetrics struct {
+	Nodes []NodeMetrics `json:"nodes"`
+}
+
+// NodeConfig represents a node exporter configuration
+type NodeConfig struct {
+	Name string
+	URL  string
+}
+
 // Collector interface for metrics collection
 type Collector interface {
 	GetMetrics() (*MetricsData, error)
+}
+
+// MultiNodeCollector interface for multi-node metrics collection
+type MultiNodeCollector interface {
+	GetMetrics() (*MultiNodeMetrics, error)
 }
 
 // NodeExporterCollector implements the Collector interface
 type NodeExporterCollector struct {
 	nodeExporterURL string
 	httpClient      *http.Client
+}
+
+// MultiNodeExporterCollector implements the MultiNodeCollector interface
+type MultiNodeExporterCollector struct {
+	nodeConfigs []NodeConfig
+	httpClient  *http.Client
 }
 
 // NewCollector creates a new metrics collector
@@ -36,6 +64,49 @@ func NewCollector(nodeExporterURL string) Collector {
 			Timeout: 10 * time.Second,
 		},
 	}
+}
+
+// NewMultiNodeCollector creates a new multi-node metrics collector
+func NewMultiNodeCollector(nodeConfigs []NodeConfig) MultiNodeCollector {
+	return &MultiNodeExporterCollector{
+		nodeConfigs: nodeConfigs,
+		httpClient: &http.Client{
+			Timeout: 10 * time.Second,
+		},
+	}
+}
+
+// GetMetrics fetches and parses metrics from multiple node_exporters
+func (c *MultiNodeExporterCollector) GetMetrics() (*MultiNodeMetrics, error) {
+	var nodeMetrics []NodeMetrics
+
+	for _, config := range c.nodeConfigs {
+		// Create a single node collector for this node
+		singleCollector := &NodeExporterCollector{
+			nodeExporterURL: config.URL,
+			httpClient:      c.httpClient,
+		}
+
+		// Get metrics for this node
+		data, err := singleCollector.GetMetrics()
+		if err != nil {
+			// Log error but continue with other nodes
+			fmt.Printf("Error fetching metrics from %s (%s): %v\n", config.Name, config.URL, err)
+			// Add empty metrics for failed nodes
+			nodeMetrics = append(nodeMetrics, NodeMetrics{
+				Name: config.Name,
+				Data: &MetricsData{CPU: 0, Memory: 0, Disk: 0},
+			})
+			continue
+		}
+
+		nodeMetrics = append(nodeMetrics, NodeMetrics{
+			Name: config.Name,
+			Data: data,
+		})
+	}
+
+	return &MultiNodeMetrics{Nodes: nodeMetrics}, nil
 }
 
 // GetMetrics fetches and parses metrics from node_exporter

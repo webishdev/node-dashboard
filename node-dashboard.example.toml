@@ -4,10 +4,21 @@
 # Port to listen on
 port = 8080
 
-# Node exporter base URLs (required); /metrics is appended automatically
+# Node exporter base URLs; /metrics is appended automatically.
+# At least one node exporter or Prometheus source is required.
 node_exporters = [
   "http://localhost:9100",
 ]
+
+# Prometheus servers whose node_exporter targets are shown as well. Their data is
+# read from Prometheus, current values and history, and not stored by the dashboard.
+# Repeat the block for several servers.
+#[[prometheus]]
+#url = "http://localhost:9090"
+# Optional label matchers limiting the targets
+#selector = 'job="node"'
+# Window for rate() in seconds, must cover at least two scrapes (default 120)
+#rate_interval = 120
 
 # Dashboard update frequency in seconds
 update_frequency = 10

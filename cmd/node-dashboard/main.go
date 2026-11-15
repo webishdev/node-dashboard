@@ -12,7 +12,8 @@ import (
 
 const usage = `node-dashboard - a web dashboard for monitoring node metrics
 
-Displays system metrics like CPU, memory, and disk usage by reading from node_exporter.
+Displays system metrics like CPU, memory, and disk usage by reading from node_exporter,
+directly or through Prometheus.
 
 Usage:
   node-dashboard [config.toml]
@@ -50,7 +51,7 @@ func run() error {
 	fmt.Printf("History database: %s\n", filepath.Join(cfg.DataDir, storage.DBFileName))
 
 	// Start the dashboard server
-	srv := server.New(cfg.Port, cfg.NodeConfigs(), cfg.UpdateFrequency, cfg.DataFetchFrequency, store, cfg.Retention(), cfg.Auth.Enabled, cfg.Auth.User, cfg.Auth.Password)
+	srv := server.New(cfg.Port, cfg.NodeConfigs(), cfg.PrometheusConfigs(), cfg.UpdateFrequency, cfg.DataFetchFrequency, store, cfg.Retention(), cfg.Auth.Enabled, cfg.Auth.User, cfg.Auth.Password)
 	if err := srv.Start(); err != nil {
 		return fmt.Errorf("starting server: %w", err)
 	}

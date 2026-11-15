@@ -33,12 +33,21 @@ func (f *fakeCollector) GetMetrics() (*metrics.MultiNodeMetrics, error) {
 	return f.metrics, nil
 }
 
+// fakeHistorySource returns fixed history
+type fakeHistorySource struct {
+	history map[string]*metrics.HistoricalMetrics
+}
+
+func (f *fakeHistorySource) QueryHistory(start, end time.Time, step time.Duration) (map[string]*metrics.HistoricalMetrics, error) {
+	return f.history, nil
+}
+
 func TestNew(t *testing.T) {
 	nodeConfigs := []metrics.NodeConfig{
 		{URL: "http://localhost:9100"},
 	}
 
-	server := New(8080, nodeConfigs, 10, 5, openTestStore(t), testRetention, false, "", "")
+	server := New(8080, nodeConfigs, nil, 10, 5, openTestStore(t), testRetention, false, "", "")
 
 	if server == nil {
 		t.Fatal("New() returned nil")
@@ -79,7 +88,7 @@ func TestNewWithAuth(t *testing.T) {
 		{URL: "http://localhost:9100"},
 	}
 
-	server := New(8080, nodeConfigs, 10, 5, openTestStore(t), testRetention, true, "admin", "password")
+	server := New(8080, nodeConfigs, nil, 10, 5, openTestStore(t), testRetention, true, "admin", "password")
 
 	dashboardServer, ok := server.(*DashboardServer)
 	if !ok {
@@ -289,13 +298,73 @@ func TestFetchStoresOnlyOnlineNodes(t *testing.T) {
 	}
 }
 
+func TestFetchDoesNotStorePrometheusNodes(t *testing.T) {
+	store := openTestStore(t)
+	server := &DashboardServer{
+		historyStore: store,
+		metricsCollector: &fakeCollector{metrics: &metrics.MultiNodeMetrics{
+			Nodes: []metrics.NodeMetrics{
+				{Name: "direct", Online: true, Data: &metrics.MetricsData{CPU: 10}, Source: metrics.SourceNodeExporter},
+			},
+		}},
+		prometheusCollectors: []metrics.MultiNodeCollector{&fakeCollector{metrics: &metrics.MultiNodeMetrics{
+			Nodes: []metrics.NodeMetrics{
+				{Name: "from-prometheus", Online: true, Data: &metrics.MetricsData{CPU: 20}, Source: metrics.SourcePrometheus},
+				{Name: "direct", Online: true, Data: &metrics.MetricsData{CPU: 30}, Source: metrics.SourcePrometheus},
+			},
+		}}},
+	}
+
+	server.fetchAndCacheMetrics()
+
+	nodes := server.getCachedMetrics().Nodes
+	if len(nodes) != 3 || nodes[1].Name != "from-prometheus" || nodes[2].Name != "direct (Prometheus 1)" {
+		t.Errorf("Expected all nodes with unique names, got %+v", nodes)
+	}
+	if renamed := server.renamedNodes[0]["direct"]; renamed != "direct (Prometheus 1)" {
+		t.Errorf("Expected the rename to be kept for the history, got %q", renamed)
+	}
+
+	data, err := store.Query(time.Now().Add(-time.Minute), time.Second)
+	if err != nil {
+		t.Fatalf("Query failed: %v", err)
+	}
+	if len(data) != 1 || data["direct"] == nil {
+		t.Errorf("Expected only the node exporter node to be stored, got %v", data)
+	}
+}
+
+func TestHandleDashboardPrometheusNode(t *testing.T) {
+	server := New(8080, nil, nil, 10, 5, openTestStore(t), testRetention, false, "", "").(*DashboardServer)
+	server.historySources = []HistorySource{&fakeHistorySource{history: map[string]*metrics.HistoricalMetrics{
+		"from-prometheus": {CPU: []metrics.DataPoint{{Timestamp: time.Now().Add(-10 * time.Minute), Value: 30}}},
+	}}}
+	server.cachedMetrics = &metrics.MultiNodeMetrics{
+		Nodes: []metrics.NodeMetrics{
+			{Name: "from-prometheus", Online: true, Data: &metrics.MetricsData{CPU: 30}, Source: metrics.SourcePrometheus},
+		},
+	}
+
+	w := httptest.NewRecorder()
+	server.handleDashboard(w, httptest.NewRequest("GET", "/", nil))
+	body := w.Body.String()
+
+	if !strings.Contains(body, ">Prometheus</span>") {
+		t.Error("Expected the Prometheus badge")
+	}
+	// The CPU chart is drawn from the history source
+	if !strings.Contains(body, "gradient-6366F1") {
+		t.Error("Expected the CPU chart drawn from the Prometheus history")
+	}
+}
+
 func TestHandleDashboardRange(t *testing.T) {
 	store := openTestStore(t)
 	if err := store.Add("test-node", time.Now().Add(-2*time.Hour), &metrics.MetricsData{CPU: 42}); err != nil {
 		t.Fatalf("Add failed: %v", err)
 	}
 
-	server := New(8080, nil, 10, 5, store, testRetention, false, "", "").(*DashboardServer)
+	server := New(8080, nil, nil, 10, 5, store, testRetention, false, "", "").(*DashboardServer)
 	server.cachedMetrics = &metrics.MultiNodeMetrics{
 		Nodes: []metrics.NodeMetrics{
 			{Name: "test-node", Online: true, Data: &metrics.MetricsData{CPU: 42}},
@@ -334,7 +403,7 @@ func TestHandleDashboardRange(t *testing.T) {
 }
 
 func TestHandleDashboardRenderError(t *testing.T) {
-	server := New(8080, nil, 10, 5, openTestStore(t), testRetention, false, "", "").(*DashboardServer)
+	server := New(8080, nil, nil, 10, 5, openTestStore(t), testRetention, false, "", "").(*DashboardServer)
 	// Fails after part of the page was rendered
 	server.template = template.Must(template.New("broken").Parse(`<p>partial</p>{{.Missing}}`))
 
@@ -408,7 +477,7 @@ func TestFormatClockOffset(t *testing.T) {
 }
 
 func TestHandleDashboardNodeInfo(t *testing.T) {
-	server := New(8080, nil, 10, 5, openTestStore(t), testRetention, false, "", "").(*DashboardServer)
+	server := New(8080, nil, nil, 10, 5, openTestStore(t), testRetention, false, "", "").(*DashboardServer)
 	nodeTime := time.Date(2026, 11, 13, 14, 3, 0, 0, time.FixedZone("CET", 3600))
 	server.cachedMetrics = &metrics.MultiNodeMetrics{
 		Nodes: []metrics.NodeMetrics{

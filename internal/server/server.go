@@ -30,6 +30,11 @@ type HistoryStore interface {
 	Prune(before time.Time) (int64, error)
 }
 
+// HistorySource returns history from a source that keeps it itself, like Prometheus, so it is not stored
+type HistorySource interface {
+	QueryHistory(start, end time.Time, step time.Duration) (map[string]*metrics.HistoricalMetrics, error)
+}
+
 // ChartRange is a selectable time range for the history charts
 type ChartRange struct {
 	Key      string
@@ -62,26 +67,30 @@ type historyCacheEntry struct {
 
 // DashboardServer implements the Server interface
 type DashboardServer struct {
-	port               int
-	nodeConfigs        []metrics.NodeConfig
-	httpServer         *http.Server
-	metricsCollector   metrics.MultiNodeCollector
-	template           *template.Template
-	updateFrequency    int
-	dataFetchFrequency int
-	enableAuth         bool
-	authUser           string
-	authPassword       string
-	cachedMetrics      *metrics.MultiNodeMetrics
-	metricsMutex       sync.RWMutex
-	historyStore       HistoryStore
-	retention          time.Duration
-	historyCache       map[string]historyCacheEntry
-	historyCacheMutex  sync.Mutex
+	port                 int
+	nodeConfigs          []metrics.NodeConfig
+	prometheusConfigs    []metrics.PrometheusConfig
+	httpServer           *http.Server
+	metricsCollector     metrics.MultiNodeCollector
+	prometheusCollectors []metrics.MultiNodeCollector // their nodes are shown but not stored
+	historySources       []HistorySource              // history of the Prometheus nodes
+	template             *template.Template
+	updateFrequency      int
+	dataFetchFrequency   int
+	enableAuth           bool
+	authUser             string
+	authPassword         string
+	cachedMetrics        *metrics.MultiNodeMetrics
+	renamedNodes         []map[string]string // per history source, names changed to avoid a clash with another source
+	metricsMutex         sync.RWMutex
+	historyStore         HistoryStore
+	retention            time.Duration
+	historyCache         map[string]historyCacheEntry
+	historyCacheMutex    sync.Mutex
 }
 
 // New creates a new dashboard server instance
-func New(port int, nodeConfigs []metrics.NodeConfig, updateFrequency int, dataFetchFrequency int, store HistoryStore, retention time.Duration, enableAuth bool, authUser, authPassword string) Server {
+func New(port int, nodeConfigs []metrics.NodeConfig, prometheusConfigs []metrics.PrometheusConfig, updateFrequency int, dataFetchFrequency int, store HistoryStore, retention time.Duration, enableAuth bool, authUser, authPassword string) Server {
 	// Create template with custom functions
 	funcMap := template.FuncMap{
 		"generateChart":    generateChartForTemplate,
@@ -98,19 +107,30 @@ func New(port int, nodeConfigs []metrics.NodeConfig, updateFrequency int, dataFe
 		panic(fmt.Sprintf("Failed to parse template: %v", err))
 	}
 
+	var prometheusCollectors []metrics.MultiNodeCollector
+	var historySources []HistorySource
+	for _, config := range prometheusConfigs {
+		collector := metrics.NewPrometheusCollector(config)
+		prometheusCollectors = append(prometheusCollectors, collector)
+		historySources = append(historySources, collector)
+	}
+
 	return &DashboardServer{
-		port:               port,
-		nodeConfigs:        nodeConfigs,
-		metricsCollector:   metrics.NewMultiNodeCollector(nodeConfigs),
-		template:           tmpl,
-		updateFrequency:    updateFrequency,
-		dataFetchFrequency: dataFetchFrequency,
-		enableAuth:         enableAuth,
-		authUser:           authUser,
-		authPassword:       authPassword,
-		historyStore:       store,
-		retention:          retention,
-		historyCache:       make(map[string]historyCacheEntry),
+		port:                 port,
+		nodeConfigs:          nodeConfigs,
+		prometheusConfigs:    prometheusConfigs,
+		metricsCollector:     metrics.NewMultiNodeCollector(nodeConfigs),
+		prometheusCollectors: prometheusCollectors,
+		historySources:       historySources,
+		template:             tmpl,
+		updateFrequency:      updateFrequency,
+		dataFetchFrequency:   dataFetchFrequency,
+		enableAuth:           enableAuth,
+		authUser:             authUser,
+		authPassword:         authPassword,
+		historyStore:         store,
+		retention:            retention,
+		historyCache:         make(map[string]historyCacheEntry),
 	}
 }
 
@@ -204,9 +224,18 @@ func bucketSize(rangeDuration time.Duration, dataFetchFrequency int) time.Durati
 	return bucket
 }
 
-// queryHistory returns the history for a range, cached for long ranges
+// queryHistory returns the stored history merged with the history sources for a range.
+// Long ranges are cached, and with history sources short ranges too, until the next fetch,
+// so page refreshes do not query Prometheus every time.
 func (s *DashboardServer) queryHistory(r ChartRange, now time.Time, bucket time.Duration) (map[string]*metrics.HistoricalMetrics, error) {
-	cacheable := r.Duration >= 24*time.Hour
+	ttl := historyCacheTTL
+	if r.Duration < 24*time.Hour {
+		ttl = 0
+		if len(s.historySources) > 0 {
+			ttl = time.Duration(s.dataFetchFrequency) * time.Second
+		}
+	}
+	cacheable := ttl > 0
 
 	if cacheable {
 		s.historyCacheMutex.Lock()
@@ -221,10 +250,34 @@ func (s *DashboardServer) queryHistory(r ChartRange, now time.Time, bucket time.
 	if err != nil {
 		return nil, err
 	}
+	if data == nil {
+		data = make(map[string]*metrics.HistoricalMetrics)
+	}
+
+	s.metricsMutex.RLock()
+	renamedNodes := s.renamedNodes
+	s.metricsMutex.RUnlock()
+
+	// A failing source is skipped, so the history of the other nodes still shows
+	for i, source := range s.historySources {
+		sourceData, err := source.QueryHistory(now.Add(-r.Duration), now, bucket)
+		if err != nil {
+			fmt.Printf("Error querying history source: %v\n", err)
+			continue
+		}
+		for name, history := range sourceData {
+			if i < len(renamedNodes) {
+				if renamed, ok := renamedNodes[i][name]; ok {
+					name = renamed
+				}
+			}
+			data[name] = history
+		}
+	}
 
 	if cacheable {
 		s.historyCacheMutex.Lock()
-		s.historyCache[r.Key] = historyCacheEntry{data: data, expires: now.Add(historyCacheTTL)}
+		s.historyCache[r.Key] = historyCacheEntry{data: data, expires: now.Add(ttl)}
 		s.historyCacheMutex.Unlock()
 	}
 
@@ -307,8 +360,37 @@ func (s *DashboardServer) fetchAndCacheMetrics() {
 		}
 	}
 
+	// Prometheus keeps the history of its nodes itself, so they are only shown
+	taken := make(map[string]bool)
+	for _, node := range metrics.Nodes {
+		taken[node.Name] = true
+	}
+	renamedNodes := make([]map[string]string, len(s.prometheusCollectors))
+	for i, collector := range s.prometheusCollectors {
+		prometheusMetrics, err := collector.GetMetrics()
+		if err != nil {
+			fmt.Printf("Error fetching Prometheus metrics: %v\n", err)
+			continue
+		}
+
+		// The history is keyed by name, so a node also scraped directly or by another Prometheus needs another name
+		renamedNodes[i] = make(map[string]string)
+		for _, node := range prometheusMetrics.Nodes {
+			name := node.Name
+			for n := 1; taken[node.Name]; n++ {
+				node.Name = fmt.Sprintf("%s (Prometheus %d)", name, n)
+			}
+			if node.Name != name {
+				renamedNodes[i][name] = node.Name
+			}
+			taken[node.Name] = true
+			metrics.Nodes = append(metrics.Nodes, node)
+		}
+	}
+
 	s.metricsMutex.Lock()
 	s.cachedMetrics = metrics
+	s.renamedNodes = renamedNodes
 	s.metricsMutex.Unlock()
 }
 
@@ -369,6 +451,10 @@ func (s *DashboardServer) Start() error {
 	fmt.Printf("Node exporters configured: %d\n", len(s.nodeConfigs))
 	for _, config := range s.nodeConfigs {
 		fmt.Printf("  - %s: %s\n", config.Name, config.URL)
+	}
+	fmt.Printf("Prometheus sources configured: %d\n", len(s.prometheusConfigs))
+	for _, config := range s.prometheusConfigs {
+		fmt.Printf("  - %s (selector %q, rate interval %s)\n", config.URL, config.Selector, config.RateInterval)
 	}
 	fmt.Printf("Data fetch frequency: %d seconds\n", s.dataFetchFrequency)
 	fmt.Printf("Dashboard update frequency: %d seconds\n", s.updateFrequency)

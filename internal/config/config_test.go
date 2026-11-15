@@ -71,6 +71,33 @@ func TestLoadAppliesDefaults(t *testing.T) {
 	}
 }
 
+func TestLoadPrometheusOnly(t *testing.T) {
+	path := writeConfig(t, `
+[[prometheus]]
+url = " http://prometheus:9090/ "
+selector = 'job="node"'
+
+[[prometheus]]
+url = "https://prometheus.example.com"
+rate_interval = 30
+`)
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load failed: %v", err)
+	}
+
+	want := []PrometheusSource{
+		{URL: "http://prometheus:9090", Selector: `job="node"`, RateInterval: DefaultRateInterval},
+		{URL: "https://prometheus.example.com", RateInterval: 30},
+	}
+	if !reflect.DeepEqual(cfg.Prometheus, want) {
+		t.Errorf("Prometheus = %+v, want %+v", cfg.Prometheus, want)
+	}
+	if sources := cfg.PrometheusConfigs(); len(sources) != 2 || sources[1].RateInterval != 30*time.Second || sources[0].Selector != `job="node"` {
+		t.Errorf("PrometheusConfigs = %+v", sources)
+	}
+}
+
 func TestLoadErrors(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -84,6 +111,10 @@ func TestLoadErrors(t *testing.T) {
 		{"retention zero", "node_exporters = [\"http://a\"]\nretention_days = 0", "retention_days"},
 		{"port out of range", "node_exporters = [\"http://a\"]\nport = 70000", "port"},
 		{"invalid toml", `node_exporters = [`, "reading config"},
+		{"prometheus without url", "[[prometheus]]\nselector = 'job=\"node\"'", "prometheus[0].url"},
+		{"prometheus url without scheme", "[[prometheus]]\nurl = \"prometheus:9090\"", "prometheus[0].url"},
+		{"prometheus negative rate interval", "[[prometheus]]\nurl = \"http://p:9090\"\nrate_interval = -1", "prometheus[0].rate_interval"},
+		{"prometheus unknown key", "[[prometheus]]\nurl = \"http://p:9090\"\nselect = \"x\"", "unknown keys: prometheus.select"},
 	}
 
 	for _, tt := range tests {

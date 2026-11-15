@@ -57,7 +57,14 @@ type NodeMetrics struct {
 	Name   string       `json:"name"`
 	Data   *MetricsData `json:"data"`
 	Online bool         `json:"online"`
+	Source string       `json:"source"` // SourceNodeExporter or SourcePrometheus
 }
+
+// Sources a node can come from
+const (
+	SourceNodeExporter = "node_exporter" // scraped by the dashboard and stored in its history
+	SourcePrometheus   = "prometheus"    // read from Prometheus, which keeps the history itself
+)
 
 // MultiNodeMetrics represents metrics for multiple nodes
 type MultiNodeMetrics struct {
@@ -177,8 +184,9 @@ func (c *MultiNodeExporterCollector) GetMetrics() (*MultiNodeMetrics, error) {
 			fmt.Printf("Error fetching metrics from %s: %v\n", config.URL, err)
 			// Add empty metrics for failed nodes with fallback name
 			nodeMetrics = append(nodeMetrics, NodeMetrics{
-				Name: fmt.Sprintf("%s", config.URL),
-				Data: &MetricsData{CPU: 0, Memory: 0, Disk: 0, CPUCores: 0, MaxMemoryMB: 0, DiskSizeGB: 0, NodeName: "Unknown", OSName: "Unknown"},
+				Name:   fmt.Sprintf("%s", config.URL),
+				Data:   &MetricsData{CPU: 0, Memory: 0, Disk: 0, CPUCores: 0, MaxMemoryMB: 0, DiskSizeGB: 0, NodeName: "Unknown", OSName: "Unknown"},
+				Source: SourceNodeExporter,
 			})
 			continue
 		}
@@ -193,6 +201,7 @@ func (c *MultiNodeExporterCollector) GetMetrics() (*MultiNodeMetrics, error) {
 			Name:   nodeName,
 			Data:   data,
 			Online: true,
+			Source: SourceNodeExporter,
 		})
 	}
 
@@ -349,30 +358,35 @@ func sumNetDevices(family *dto.MetricFamily) float64 {
 
 // filesystem holds the size and free bytes of one device
 type filesystem struct {
-	root bool // mounted at "/"
-	size float64
-	free float64
+	device string
+	root   bool // mounted at "/"
+	size   float64
+	free   float64
 }
 
 // collectFilesystems adds the samples of a filesystem metric family to the devices, skipping devices with errors
 func collectFilesystems(family *dto.MetricFamily, filesystems map[string]*filesystem, set func(*filesystem, float64)) {
 	for _, metric := range family.GetMetric() {
-		labels := metricLabels(metric)
-		if labels["device_error"] != "" {
-			continue
-		}
-
-		// A device can be mounted several times, e.g. the bind mounts of a container
-		fs := filesystems[labels["device"]]
-		if fs == nil {
-			fs = &filesystem{}
-			filesystems[labels["device"]] = fs
-		}
-		if labels["mountpoint"] == "/" {
-			fs.root = true
-		}
-		set(fs, sampleValue(metric))
+		addFilesystemSample(filesystems, metricLabels(metric), sampleValue(metric), set)
 	}
+}
+
+// addFilesystemSample adds one filesystem sample to its device, skipping devices with errors
+func addFilesystemSample(filesystems map[string]*filesystem, labels map[string]string, value float64, set func(*filesystem, float64)) {
+	if labels["device_error"] != "" {
+		return
+	}
+
+	// A device can be mounted several times, e.g. the bind mounts of a container
+	fs := filesystems[labels["device"]]
+	if fs == nil {
+		fs = &filesystem{device: labels["device"]}
+		filesystems[labels["device"]] = fs
+	}
+	if labels["mountpoint"] == "/" {
+		fs.root = true
+	}
+	set(fs, value)
 }
 
 // selectRootFilesystem returns the filesystem mounted at "/", or the largest one if there is none,
@@ -463,10 +477,14 @@ func unixTime(seconds float64) time.Time {
 
 // toMetricsData converts raw scrape values into dashboard metrics
 func (c *NodeExporterCollector) toMetricsData(raw *rawMetrics, scrapedAt time.Time) *MetricsData {
-	var memUsage, diskUsage float64
-
 	cpuUsage := c.cpuUsage(raw.cpuIdle, raw.cpuTotal)
 	netRx, netTx := c.netRates(raw.netRx, raw.netTx, scrapedAt)
+	return buildMetricsData(raw, cpuUsage, netRx, netTx, scrapedAt)
+}
+
+// buildMetricsData converts raw values and the already computed CPU usage and network rates into dashboard metrics
+func buildMetricsData(raw *rawMetrics, cpuUsage, netRx, netTx float64, scrapedAt time.Time) *MetricsData {
+	var memUsage, diskUsage float64
 
 	// Node clock, shown in the node's own time zone when it is known
 	var nodeTime time.Time

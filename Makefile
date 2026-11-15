@@ -29,7 +29,7 @@ build-prod:
 .PHONY: run
 run: build
 	@echo "Running node-dashboard..."
-	$(BUILD_DIR)/$(BINARY_NAME) --port 8080 --node-exporter http://localhost:9100
+	$(BUILD_DIR)/$(BINARY_NAME) node-dashboard.toml
 
 # Clean build artifacts
 .PHONY: clean

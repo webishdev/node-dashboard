@@ -1,3 +1,5 @@
 .idea
 build
 ./node-dashboard
+data/
+node-dashboard.toml

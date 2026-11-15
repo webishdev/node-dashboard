@@ -1,0 +1,28 @@
+# Node Dashboard configuration
+# Copy this file to node-dashboard.toml and adjust it.
+
+# Port to listen on
+port = 8080
+
+# Node exporter base URLs (required); /metrics is appended automatically
+node_exporters = [
+  "http://localhost:9100",
+]
+
+# Dashboard update frequency in seconds
+update_frequency = 10
+
+# Node exporter data fetch frequency in seconds
+data_fetch_frequency = 5
+
+# Directory for the metrics history database
+data_dir = "./data"
+
+# Number of days to keep metrics history
+retention_days = 30
+
+# Basic authentication; user and password are required when enabled
+[auth]
+enabled = false
+user = ""
+password = ""
